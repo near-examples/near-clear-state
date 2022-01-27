@@ -1,0 +1,20 @@
+{
+  "name": "near-clear-state",
+  "version": "1.0.0",
+  "description": "Tool to let NEAR users clear the state of their account ",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "type": "module",
+  "author": "Dorian",
+  "license": "ISC",
+  "dependencies": {
+    "commander": "^8.3.0",
+    "near-api-js": "^0.44.2",
+    "os": "^0.1.2",
+    "utf8": "^3.0.0"
+  },
+  "bin": {
+    "near-clear-state": "./index.js"
+  }
+}
