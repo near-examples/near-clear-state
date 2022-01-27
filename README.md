@@ -39,5 +39,5 @@ cd near-clear-state && npm i
 ### Step 4 Clear Your State
 
 ```bash
-near-clear-state clear-state --account blockhead.testnet
+near-clear-state clear-state --account <account-name.testnet>
 ```
