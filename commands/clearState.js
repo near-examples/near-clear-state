@@ -53,7 +53,7 @@ export async function clearState(optionsObject) {
   if (account) {
     // deploys contract
     const response = await account.deployContract(
-      (await fs).readFileSync("../contractWasm/state_cleanup.wasm")
+      (await fs).readFileSync("./contractWasm/state_cleanup.wasm")
     );
 
     console.log("deploying contract. Response:", response);
