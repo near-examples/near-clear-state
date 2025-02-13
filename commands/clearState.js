@@ -10,7 +10,7 @@ let config;
 let account;
 
 // set up near
-const initiateNear = async () => {
+const initiateNear = async (netId) => {
   const { keyStores } = nearAPI;
   const homedir = (await os).homedir();
   const CREDENTIALS_DIR = ".near-credentials";
@@ -20,9 +20,9 @@ const initiateNear = async () => {
   const keyStore = new keyStores.UnencryptedFileSystemKeyStore(credentialsPath);
 
   config = {
-    networkId: "testnet",
+    networkId: netId,
     keyStore,
-    nodeUrl: "https://rpc.testnet.near.org",
+    nodeUrl: "https://rpc."+ netId +".near.org",
     walletUrl: "https://wallet.testnet.near.org",
     helperUrl: "https://helper.testnet.near.org",
     explorerUrl: "https://explorer.testnet.near.org",
@@ -30,11 +30,12 @@ const initiateNear = async () => {
 
   near = await connect(config);
 };
+
 export async function clearState(optionsObject) {
-  // console.log(optionsOutput);
-  await initiateNear();
-  console.log("account name is ", optionsObject.account[0]);
-  account = await near.account(optionsObject.account[0]);
+  // console.log(optionsObject);
+  await initiateNear(optionsObject.network);
+  console.log("account name is ", optionsObject.account);
+  account = await near.account(optionsObject.account);
 
   let state = await account.viewState("", { finality: "final" });
 
@@ -71,7 +72,7 @@ export async function clearState(optionsObject) {
     );
 
     return await contract.account.functionCall({
-      contractId: optionsObject.account[0],
+      contractId: optionsObject.account,
       methodName: "clean",
       args: {
         keys: keys,
