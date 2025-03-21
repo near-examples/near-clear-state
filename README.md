@@ -28,7 +28,7 @@ near login
 
 ### Step 2 Clone this Repo!
 
-`git clone https://github.com/doriancrutcher/near-clear-state.git`
+`git clone git@github.com:near-examples/near-clear-state.git`
 
 ### Step 3 Install Dependencies
 
