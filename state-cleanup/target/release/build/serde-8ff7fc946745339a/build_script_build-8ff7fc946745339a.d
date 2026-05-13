@@ -1,5 +1,0 @@
-/Users/owen/projects/proximity/shade-agent-framework/near-clear-state/state-cleanup/target/release/build/serde-8ff7fc946745339a/build_script_build-8ff7fc946745339a: /Users/owen/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/build.rs
-
-/Users/owen/projects/proximity/shade-agent-framework/near-clear-state/state-cleanup/target/release/build/serde-8ff7fc946745339a/build_script_build-8ff7fc946745339a.d: /Users/owen/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/build.rs
-
-/Users/owen/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/build.rs:
