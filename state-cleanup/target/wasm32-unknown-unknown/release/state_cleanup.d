@@ -1,0 +1,1 @@
+/Users/owen/projects/proximity/shade-agent-framework/near-clear-state/state-cleanup/target/wasm32-unknown-unknown/release/state_cleanup.wasm: /Users/owen/projects/proximity/shade-agent-framework/near-clear-state/state-cleanup/src/lib.rs
