@@ -1,19 +1,15 @@
-use base64::{Engine as _, engine::general_purpose::STANDARD};
-use near_sdk::serde::Deserialize;
-use near_sdk::{env, serde_json};
+use near_sdk::json_types::Base64VecU8;
+use near_sdk::{env, near};
 
-#[derive(Deserialize)]
-#[serde(crate = "near_sdk::serde")]
-struct Args {
-    pub keys: Vec<String>,
-}
+#[near(contract_state)]
+#[derive(Default)]
+pub struct Contract {}
 
-#[unsafe(no_mangle)]
-pub extern "C" fn clean() {
-    env::setup_panic_hook();
-    let input = env::input().unwrap();
-    let args: Args = serde_json::from_slice(&input).unwrap();
-    for key in args.keys.iter() {
-        env::storage_remove(&STANDARD.decode(key).unwrap());
+#[near]
+impl Contract {
+    pub fn clean(keys: Vec<Base64VecU8>) {
+        for key in keys.iter() {
+            env::storage_remove(&key.0);
+        }
     }
 }

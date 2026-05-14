@@ -9,7 +9,6 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-base64 = { version = "=0.22.1", default-features = false, features = ["alloc"] }
 near-sdk = "=5.26.1"
 
 [profile.release]
