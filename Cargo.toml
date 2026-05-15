@@ -1,3 +1,6 @@
 [workspace]
 resolver = "2"
 members = ["extension"]
+# contract/ is its own cargo-near project (separate toolchain + reproducible
+# build flow) and must stay out of the extension workspace.
+exclude = ["contract"]
