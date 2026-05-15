@@ -27,3 +27,14 @@ tokio = { version = "1", features = ["rt-multi-thread"] }
 strum = { version = "0.26", features = ["derive"] }
 base64 = "0.22"
 sha2 = "0.10"
+inquire = "0.9.3"
+shell-words = "1"
+clap = { version = "4", features = ["derive"] }
+near-token = "0.3"
+
+[dev-dependencies]
+near-api = "=0.8.6"
+near-api-types = "=0.8.6"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+rand = "0.8"
+dotenvy = "0.15"

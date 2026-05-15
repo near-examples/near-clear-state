@@ -1,12 +1,13 @@
-node_modules/
+# Rust
+target/
+**/target/
+
+# OS / editor
 .DS_Store
 .DS_Store?
 */.DS_Store
-package-lock.json
-yarn.lock
-neardev
 .idea
-.docz
-serve*
 .vscode
-.env.local
+
+# Env
+.env
