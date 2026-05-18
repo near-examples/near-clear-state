@@ -72,12 +72,12 @@ This extention intentionally attempts to clean all state in a single transaction
 The wasm at `extension/wasm/state_cleanup.wasm` was built reproducibly
 with a docker-pinned `cargo-near` toolchain at commit:
 
-> **`a240b4fd852840351a04d18895aa9a27ddafc4f1`**
+> **`92c602693aa0c19b34e2704ef9688e12f2ec4f1b`**
 
 To audit the exact source that produced it, check that commit out:
 
 ```
-git checkout a240b4fd852840351a04d18895aa9a27ddafc4f1
+git checkout 92c602693aa0c19b34e2704ef9688e12f2ec4f1b
 ```
 
 Then inspect the `contract/` directory directly — `src/lib.rs` (the
