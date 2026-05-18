@@ -74,22 +74,31 @@ with a docker-pinned `cargo-near` toolchain at commit:
 
 > **`a240b4fd852840351a04d18895aa9a27ddafc4f1`**
 
-To audit the source it was built from:
+To audit the exact source that produced it, check that commit out:
 
 ```
-git show a240b4fd852840351a04d18895aa9a27ddafc4f1:contract/src/lib.rs
+git checkout a240b4fd852840351a04d18895aa9a27ddafc4f1
 ```
 
-Then confirm the committed wasm actually corresponds to that source by
-rebuilding it (requires docker):
+Then inspect the `contract/` directory directly — `src/lib.rs` (the
+contract code), `Cargo.toml` (which pins the `near-sdk` version and
+the reproducible-build docker image + digest under
+`[package.metadata.near.reproducible_build]`), and `rust-toolchain.toml`
+(the pinned toolchain). Confirm that what's there matches what you
+expect to be running on chain.
+
+When you're done auditing, switch back and run the verify script
+(requires docker):
 
 ```
+git switch -
 ./scripts/verify-wasm.sh
 ```
 
 The script reads the build-context commit out of the wasm's NEP-330
-metadata, checks that commit out into a temp worktree, runs
-`cargo near build reproducible-wasm` there, and compares the sha256s.
+metadata, checks that commit out into a throwaway worktree, runs
+`cargo near build reproducible-wasm` there, and compares the sha256
+of the rebuilt wasm against the committed one.
 
 Whenever the bundled wasm is updated, the commit above is updated
 along with it.
