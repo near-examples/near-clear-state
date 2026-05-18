@@ -130,8 +130,16 @@ git worktree add --detach "$WORKTREE" "$COMMIT"
 # NEW      = the sha of the wasm we just rebuilt from source in the
 #            temp worktree.
 FRESH="$WORKTREE/contract/target/near/state_cleanup.wasm"
-EXPECTED="$(shasum -a 256 "$COMMITTED" | awk '{print $1}')"
-NEW="$(shasum -a 256 "$FRESH"          | awk '{print $1}')"
+if command -v sha256sum >/dev/null 2>&1; then
+  SHA256="sha256sum"
+elif command -v shasum >/dev/null 2>&1; then
+  SHA256="shasum -a 256"
+else
+  echo "Neither sha256sum nor shasum is available." >&2
+  exit 1
+fi
+EXPECTED="$($SHA256 "$COMMITTED" | awk '{print $1}')"
+NEW="$($SHA256 "$FRESH"          | awk '{print $1}')"
 
 echo
 echo "Expected (committed):      $EXPECTED"

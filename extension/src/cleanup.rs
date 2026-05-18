@@ -54,16 +54,13 @@ pub async fn read_state(
 }
 
 /// The 50 KB ViewState cap is enforced by most public RPCs (FastNEAR /
-/// official). Detect it and rewrite to a message that points the user at
-/// the fix.
+/// official). Detect it via the typed handler variant and rewrite to a
+/// message that points the user at the fix.
 fn map_view_state_error(err: JsonRpcError<RpcQueryError>) -> color_eyre::eyre::Report {
-    let rendered = err.to_string();
-    let inner = if let JsonRpcError::ServerError(JsonRpcServerError::HandlerError(handler_err)) = &err {
-        format!("{handler_err:?}")
-    } else {
-        String::new()
-    };
-    if rendered.contains("too large") || inner.contains("too large") {
+    if let JsonRpcError::ServerError(JsonRpcServerError::HandlerError(
+        RpcQueryError::TooLargeContractState { .. },
+    )) = &err
+    {
         return eyre!(
             "Account state is too large for this RPC's `view_state` cap.\n\
              Try configuring a different RPC with `near config edit-connection` and retry.",

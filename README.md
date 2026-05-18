@@ -1,7 +1,7 @@
 # `near-clear-state`
 
 A [near-cli-rs](https://github.com/near/near-cli-rs) extension that wipes a
-contract account's on-chain state without deleting the account. ()
+contract account's on-chain state without deleting the account.
 
 Before using this tool review the [NOTICE.txt](./NOTICE.txt) file.
 
@@ -83,12 +83,11 @@ The second command should print the usage block from this extension
 | `extension/src/` | The `near-clear-state` Rust extension. |
 | `scripts/verify-wasm.sh` | Read the embedded build-context commit from the committed wasm, check it out into a temp worktree, rebuild reproducibly, and diff. Requires docker. |
 
-This extention attempts to clean all state in a single transaction to fit with the near-cli-rs model of one command equalling one transaction. It's assumed that any limitations of cleaning the contract will come from RPCs not being able to serve a large enough view_state rather than the call running out of gas or exceeding the max_transaction_size of 1.5MB.
+This extension attempts to clean all state in a single transaction to fit with the near-cli-rs model of one command equalling one transaction. It's assumed that any limitations of cleaning the contract will come from RPCs not being able to serve a large enough view_state rather than the call running out of gas or exceeding the max_transaction_size of 1.5MB.
 
 ## Verifying the bundled wasm
 
-The wasm at `extension/wasm/state_cleanup.wasm` was built reproducibly
-
+The wasm at `extension/wasm/state_cleanup.wasm` was built reproducibly.
 To audit the exact source that produced it, check out the commit it was built in:
 
 ```

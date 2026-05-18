@@ -41,11 +41,23 @@ pub struct ProtocolConstants {
     pub max_total_prepaid_gas: u128,
 }
 
-/// Conservative overhead (in bytes) for the parts of a SignedTransaction that
-/// wrap the actions list: signer_id + receiver_id length prefixes and bytes,
-/// public_key, nonce, block_hash, and the signature. We add 2 × account_id.len()
-/// for the two AccountId fields and a fixed pad for everything else.
-const TX_WRAPPER_OVERHEAD_BYTES: usize = 256;
+/// Conservative upper bound on the borsh-serialized parts of a SignedTransaction
+/// that aren't in the actions list. Concretely:
+///
+///   public_key:  ~33 bytes  (1-byte enum tag + 32-byte ed25519 key)
+///   nonce:        8 bytes
+///   block_hash:  32 bytes
+///   signature:   ~65 bytes  (1-byte enum tag + 64-byte ed25519 sig)
+///   actions Vec: 4-byte length prefix (the per-action bytes are sized separately)
+///   signer_id:   4-byte length prefix (the account_id bytes are added in
+///                estimate_transaction_size as 2 × account_id.len())
+///   receiver_id: 4-byte length prefix (same)
+///   tx version tag + other small enum discriminants
+///
+/// True overhead is ~150 bytes. We set 2560 — well over 10× the real value —
+/// because the tx-size budget is ~1.5 MB, so a few KB of slack here is free
+/// and absorbs any future variant additions without needing to recompute.
+const TX_WRAPPER_OVERHEAD_BYTES: usize = 2560;
 
 /// Safety buffer (in bytes) we keep below the protocol's `max_transaction_size`
 /// when preflighting. 0.1 MiB of slack absorbs any underestimate from the

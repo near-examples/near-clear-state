@@ -129,6 +129,13 @@ async fn build_transaction(
             budget_tgas = gas_budget as f64 / 1e12,
         ));
     }
+    let gas_budget_u64 = u64::try_from(gas_budget).map_err(|_| {
+        eyre!(
+            "max_total_prepaid_gas ({gas_budget}) exceeds u64::MAX — this is a \
+             protocol-config shape change the extension does not understand. \
+             Open an issue.",
+        )
+    })?;
 
     eprintln!(
         "Wiping {} key(s) from {account_id} (est. {:.1} Tgas).",
@@ -156,7 +163,7 @@ async fn build_transaction(
         Action::FunctionCall(Box::new(FunctionCallAction {
             method_name: "clean".to_string(),
             args: args_bytes,
-            gas: near_primitives::gas::Gas::from_gas(gas_budget as u64),
+            gas: near_primitives::gas::Gas::from_gas(gas_budget_u64),
             deposit: near_token::NearToken::from_yoctonear(0),
         })),
     ];

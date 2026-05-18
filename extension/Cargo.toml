@@ -1,7 +1,7 @@
 [package]
 name = "near-clear-state"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 rust-version = "1.88"
 description = "near-cli-rs extension that wipes a contract account's on-chain state without deleting the account."
 repository = "https://github.com/near-examples/near-clear-state"
@@ -21,13 +21,10 @@ color-eyre = "0.6"
 near-primitives = "0.35"
 near-jsonrpc-client = { version = "0.21", features = ["any"] }
 near-jsonrpc-primitives = "0.35"
-near-gas = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread"] }
-strum = { version = "0.26", features = ["derive"] }
 base64 = "0.22"
-sha2 = "0.10"
 inquire = "0.9.3"
 shell-words = "1"
 clap = { version = "4", features = ["derive"] }
@@ -37,6 +34,7 @@ borsh = "1"
 [dev-dependencies]
 near-api = "=0.8.6"
 near-api-types = "=0.8.6"
+near-gas = "0.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 rand = "0.8"
 dotenvy = "0.15"
