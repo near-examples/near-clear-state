@@ -1,19 +1,17 @@
-//! `near-clean-state` — a near-cli-rs extension that wipes a contract
+//! `near-clear-state` — a near-cli-rs extension that wipes a contract
 //! account's on-chain state without deleting the account.
 //!
 //! Flow per invocation:
 //!   1. Read state via ViewState RPC.
-//!   2. Fetch live `storage_remove_*` gas costs from protocol_config.
+//!   2. Fetch live `storage_remove_*` gas costs, `max_transaction_size`,
+//!      and `max_total_prepaid_gas` from protocol_config.
 //!   3. Estimate the gas needed to remove every key; error out if it
-//!      exceeds `MAX_CLEAN_GAS` (single-tx budget).
+//!      exceeds `max_total_prepaid_gas` (single-tx budget).
 //!   4. Build one transaction = DeployContract(bundled wasm)
-//!      + one FunctionCall("clean", all_keys) carrying `MAX_CLEAN_GAS`.
-//!   5. Hand it to near-cli-rs's signer chain.
-//!
-//! At 1000 Tgas/tx (protocol version 83+) a single call can remove a
-//! few megabytes of contract state, which is far above what `view_state`
-//! is willing to return. A multi-tx fallback for permissive-RPC,
-//! many-MB cases is intentional future work — see [`plan::plan_batches`].
+//!      + one FunctionCall("clean", all_keys) carrying `max_total_prepaid_gas`.
+//!   5. Preflight serialized tx size against `max_transaction_size`; bail
+//!      with a friendly message rather than letting the node reject it.
+//!   6. Hand it to near-cli-rs's signer chain.
 
 pub mod cleanup;
 pub mod plan;
@@ -29,14 +27,8 @@ const BUNDLED_WASM: &[u8] = include_bytes!("../wasm/state_cleanup.wasm");
 
 #[derive(Debug, Clone, interactive_clap::InteractiveClap)]
 #[interactive_clap(input_context = near_cli_rs::GlobalContext)]
-#[interactive_clap(output_context = CleanStateContext)]
-pub struct CleanStateCommand {
-    /// Quiet mode — suppress non-essential output.
-    #[interactive_clap(long)]
-    pub quiet: bool,
-    /// TEACH-ME mode — print detailed explanations of what the CLI is doing.
-    #[interactive_clap(long)]
-    pub teach_me: bool,
+#[interactive_clap(output_context = ClearStateContext)]
+pub struct ClearStateCommand {
     #[interactive_clap(skip_default_input_arg)]
     /// What is the contract account ID to wipe?
     account_id: near_cli_rs::types::account_id::AccountId,
@@ -45,7 +37,7 @@ pub struct CleanStateCommand {
     network_config: near_cli_rs::network_for_transaction::NetworkForTransactionArgs,
 }
 
-impl CleanStateCommand {
+impl ClearStateCommand {
     pub fn input_account_id(
         context: &near_cli_rs::GlobalContext,
     ) -> Result<Option<near_cli_rs::types::account_id::AccountId>> {
@@ -57,15 +49,15 @@ impl CleanStateCommand {
 }
 
 #[derive(Debug, Clone)]
-pub struct CleanStateContext {
+pub struct ClearStateContext {
     global_context: near_cli_rs::GlobalContext,
     account_id: near_primitives::types::AccountId,
 }
 
-impl CleanStateContext {
+impl ClearStateContext {
     pub fn from_previous_context(
         previous_context: near_cli_rs::GlobalContext,
-        scope: &<CleanStateCommand as interactive_clap::ToInteractiveClapContextScope>::InteractiveClapContextScope,
+        scope: &<ClearStateCommand as interactive_clap::ToInteractiveClapContextScope>::InteractiveClapContextScope,
     ) -> Result<Self> {
         Ok(Self {
             global_context: previous_context,
@@ -79,8 +71,8 @@ struct CleanArgs<'a> {
     keys: Vec<&'a str>,
 }
 
-impl From<CleanStateContext> for near_cli_rs::commands::ActionContext {
-    fn from(item: CleanStateContext) -> Self {
+impl From<ClearStateContext> for near_cli_rs::commands::ActionContext {
+    fn from(item: ClearStateContext) -> Self {
         let account_id = item.account_id.clone();
 
         let get_prepopulated_transaction_after_getting_network_callback: near_cli_rs::commands::GetPrepopulatedTransactionAfterGettingNetworkCallback =
@@ -118,7 +110,7 @@ async fn build_transaction(
 ) -> Result<near_cli_rs::commands::PrepopulatedTransaction> {
     let client = network_config.json_rpc_client();
 
-    let gas_constants = plan::fetch_gas_constants(&client).await?;
+    let protocol_constants = plan::fetch_protocol_constants(&client).await?;
     let entries = cleanup::read_state(&client, account_id).await?;
 
     if entries.is_empty() {
@@ -127,17 +119,14 @@ async fn build_transaction(
         ));
     }
 
-    // Single-tx model: refuse if the wipe wouldn't fit in one tx. The
-    // multi-tx fallback (chunk across N txs using plan::plan_batches) is
-    // future work — needed only when a permissive RPC returns many MB.
-    let estimated = plan::estimate_total_gas(&entries, &gas_constants);
-    if estimated > plan::MAX_CLEAN_GAS {
+    let estimated = plan::estimate_total_gas(&entries, &protocol_constants.gas);
+    let gas_budget = protocol_constants.max_total_prepaid_gas;
+    if estimated > gas_budget {
         return Err(eyre!(
             "State is too large to wipe in a single transaction \
-             (estimated {estimated_tgas:.1} Tgas, budget {budget_tgas:.0} Tgas). \
-             Multi-transaction wipes are not yet supported.",
+             (estimated {estimated_tgas:.1} Tgas, budget {budget_tgas:.0} Tgas).",
             estimated_tgas = estimated as f64 / 1e12,
-            budget_tgas = plan::MAX_CLEAN_GAS as f64 / 1e12,
+            budget_tgas = gas_budget as f64 / 1e12,
         ));
     }
 
@@ -167,10 +156,26 @@ async fn build_transaction(
         Action::FunctionCall(Box::new(FunctionCallAction {
             method_name: "clean".to_string(),
             args: args_bytes,
-            gas: near_primitives::gas::Gas::from_gas(plan::MAX_CLEAN_GAS as u64),
+            gas: near_primitives::gas::Gas::from_gas(gas_budget as u64),
             deposit: near_token::NearToken::from_yoctonear(0),
         })),
     ];
+
+    let tx_size = plan::estimate_transaction_size(&actions, account_id)?;
+    let tx_size_budget = protocol_constants
+        .max_transaction_size
+        .saturating_sub(plan::TX_SIZE_BUFFER_BYTES);
+    if tx_size as u64 > tx_size_budget {
+        return Err(eyre!(
+            "Wipe transaction would exceed the protocol max transaction size \
+             ({tx_size} B > {budget} B budget; protocol cap {cap} B with \
+             {buffer} B safety buffer). Retry with an RPC whose `view_state` \
+             returns fewer keys per call, or open an issue.",
+            budget = tx_size_budget,
+            cap = protocol_constants.max_transaction_size,
+            buffer = plan::TX_SIZE_BUFFER_BYTES,
+        ));
+    }
 
     Ok(near_cli_rs::commands::PrepopulatedTransaction {
         signer_id: account_id.clone(),

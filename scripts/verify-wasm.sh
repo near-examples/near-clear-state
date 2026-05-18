@@ -34,6 +34,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# Anchor of trust: the commit we expect the committed wasm to have been
+# built from. Updated in lockstep with extension/wasm/state_cleanup.wasm.
+# Without this assertion an attacker could swap the wasm AND rewrite its
+# embedded source URL to point at any commit that reproducibly builds to
+# those bytes — verification would silently follow them. Pinning the
+# commit here anchors trust in this script (reviewable in git history)
+# instead of in the opaque wasm.
+EXPECTED_COMMIT="92c602693aa0c19b34e2704ef9688e12f2ec4f1b"
+
 # Optional first arg overrides the wasm path. Default = in-repo copy.
 COMMITTED="${1:-$ROOT/extension/wasm/state_cleanup.wasm}"
 
@@ -68,6 +77,17 @@ fi
 # only the 40-char commit hash.
 COMMIT="${URL##*/tree/}"
 echo "Committed wasm was built at: $URL"
+
+# Step 1b — assert the embedded commit matches what this script expects.
+# This is the trust anchor: if the wasm has been swapped for one pointing
+# at a different commit, refuse to verify regardless of whether that other
+# commit happens to reproducibly build to the swapped bytes.
+if [ "$COMMIT" != "$EXPECTED_COMMIT" ]; then
+  echo "Embedded build-context commit does not match expected." >&2
+  echo "  expected: $EXPECTED_COMMIT" >&2
+  echo "  embedded: $COMMIT" >&2
+  exit 1
+fi
 
 # Step 2 — confirm we have that commit locally.
 #

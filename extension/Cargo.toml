@@ -1,17 +1,16 @@
 [package]
-name = "near-clean-state"
+name = "near-clear-state"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
 description = "near-cli-rs extension that wipes a contract account's on-chain state without deleting the account."
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/PiVortex/contract-cleaner"
-homepage = "https://github.com/PiVortex/contract-cleaner"
+repository = "https://github.com/near-examples/near-clear-state"
+homepage = "https://github.com/near-examples/near-clear-state"
 keywords = ["near", "near-cli-rs", "extension", "contract", "state"]
 categories = ["command-line-utilities"]
 
 [[bin]]
-name = "near-clean-state"
+name = "near-clear-state"
 path = "src/main.rs"
 
 [dependencies]
@@ -33,6 +32,7 @@ inquire = "0.9.3"
 shell-words = "1"
 clap = { version = "4", features = ["derive"] }
 near-token = "0.3"
+borsh = "1"
 
 [dev-dependencies]
 near-api = "=0.8.6"

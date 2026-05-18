@@ -1,13 +1,13 @@
-//! `near-clean-state` binary entry point.
+//! `near-clear-state` binary entry point.
 //!
-//! Invoked via near-cli-rs's PATH dispatch — typing `near clean-state <args>`
-//! strips the `clean-state` token and runs this binary with the remaining
+//! Invoked via near-cli-rs's PATH dispatch — typing `near clear-state <args>`
+//! strips the `clear-state` token and runs this binary with the remaining
 //! args, so we accept account_id / max_calls / network subcommand chain
 //! directly at the top level.
 
 use color_eyre::owo_colors::OwoColorize;
 use interactive_clap::ToCliArgs;
-use near_clean_state::CleanStateCommand;
+use near_clear_state::ClearStateCommand;
 use near_cli_rs::{CliResult, Verbosity};
 
 fn main() -> CliResult {
@@ -23,25 +23,20 @@ fn main() -> CliResult {
         .display_env_section(display_env_section)
         .install()?;
 
-    let cli = match CleanStateCommand::try_parse() {
+    let cli = match ClearStateCommand::try_parse() {
         Ok(cli) => cli,
         Err(error) => error.exit(),
     };
 
-    let verbosity = match (cli.quiet, cli.teach_me) {
-        (true, _) => Verbosity::Quiet,
-        (false, true) => Verbosity::TeachMe,
-        (false, false) => Verbosity::Interactive,
-    };
-    near_cli_rs::setup_tracing(verbosity)?;
+    near_cli_rs::setup_tracing(Verbosity::Interactive)?;
 
     let global_context = near_cli_rs::GlobalContext {
         config,
         offline: false,
-        verbosity,
+        verbosity: Verbosity::Interactive,
     };
 
-    match <CleanStateCommand as interactive_clap::FromCli>::from_cli(Some(cli), global_context) {
+    match <ClearStateCommand as interactive_clap::FromCli>::from_cli(Some(cli), global_context) {
         interactive_clap::ResultFromCli::Ok(cli_cmd)
         | interactive_clap::ResultFromCli::Cancel(Some(cli_cmd)) => {
             eprintln!(
@@ -49,7 +44,7 @@ fn main() -> CliResult {
                 std::env::args()
                     .next()
                     .as_deref()
-                    .unwrap_or("near-clean-state")
+                    .unwrap_or("near-clear-state")
                     .green(),
                 shell_words::join(cli_cmd.to_cli_args()).green(),
             );

@@ -2,29 +2,13 @@
 //!
 //! Gas constants are pulled from the live chain via
 //! `EXPERIMENTAL_protocol_config` rather than hardcoded.
-//!
-//! Current model: the entire wipe goes in **one** transaction — one
-//! `DeployContract` action + one `FunctionCall("clean", all_keys)`
-//! action with the full gas budget attached. With protocol version 83
-//! lifting the per-tx cap to 1000 Tgas, a single call can clear
-//! several megabytes of contract state, which comfortably covers any
-//! state size that `view_state` is willing to return.
-//!
-//! [`plan_batches`] is retained for the future multi-tx fallback —
-//! useful when a permissive RPC returns a state larger than one tx
-//! can wipe.
 
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Result, eyre};
 use near_jsonrpc_client::JsonRpcClient;
 use near_jsonrpc_client::methods::EXPERIMENTAL_protocol_config::RpcProtocolConfigError;
-use near_primitives::types::{BlockReference, Finality};
+use near_primitives::action::Action;
+use near_primitives::types::{AccountId, BlockReference, Finality};
 use serde::Deserialize;
-
-/// Gas attached to the single `clean(keys=[...])` call. 990 Tgas leaves
-/// ~10 Tgas of slack under the protocol's 1000 Tgas per-tx cap to cover
-/// action-level overhead (function-call base ~1 Ggas, receipt creation
-/// ~216 Mgas) plus headroom for future protocol param changes.
-pub const MAX_CLEAN_GAS: u128 = 990_000_000_000_000;
 
 /// +30% multiplier over the published `storage_remove` host-function cost.
 /// Covers wasm execution (the contract's `for` loop + base64 decode) and
@@ -41,6 +25,33 @@ pub struct GasConstants {
     #[serde(deserialize_with = "u128_from_any")]
     pub storage_remove_ret_value_byte: u128,
 }
+
+/// Protocol params relevant to preflighting a wipe transaction.
+#[derive(Debug, Clone, Copy)]
+pub struct ProtocolConstants {
+    pub gas: GasConstants,
+    /// Protocol cap on the borsh-serialized size of a single transaction,
+    /// in bytes. Fetched live so we don't drift if the protocol param changes.
+    pub max_transaction_size: u64,
+    /// Protocol cap on the sum of `FunctionCall.gas` across a single tx's
+    /// actions, in gas units. This is the gas budget we attach to the
+    /// single `clean(keys=[...])` call and the ceiling the gas estimate
+    /// must come in under. Action base costs are billed separately against
+    /// the signer's NEAR balance and do not count against this cap.
+    pub max_total_prepaid_gas: u128,
+}
+
+/// Conservative overhead (in bytes) for the parts of a SignedTransaction that
+/// wrap the actions list: signer_id + receiver_id length prefixes and bytes,
+/// public_key, nonce, block_hash, and the signature. We add 2 × account_id.len()
+/// for the two AccountId fields and a fixed pad for everything else.
+const TX_WRAPPER_OVERHEAD_BYTES: usize = 256;
+
+/// Safety buffer (in bytes) we keep below the protocol's `max_transaction_size`
+/// when preflighting. 0.1 MiB of slack absorbs any underestimate from the
+/// wrapper-overhead approximation and gives headroom if the protocol param
+/// is lowered between fetch and submission.
+pub const TX_SIZE_BUFFER_BYTES: u64 = 100 * 1024;
 
 /// Gas-cost fields are emitted as either JSON numbers or stringified
 /// integers depending on serde-json's number-handling defaults across
@@ -76,12 +87,20 @@ struct RuntimeConfigPartial {
 #[derive(Debug, Deserialize)]
 struct WasmConfigPartial {
     ext_costs: GasConstants,
+    limit_config: LimitConfigPartial,
 }
 
-/// Fetch the live `storage_remove_*` costs from the chain. Reads only the
-/// fields we need so the deserialization isn't coupled to the rest of the
-/// runtime-config shape.
-pub async fn fetch_gas_constants(client: &JsonRpcClient) -> Result<GasConstants> {
+#[derive(Debug, Deserialize)]
+struct LimitConfigPartial {
+    max_transaction_size: u64,
+    #[serde(deserialize_with = "u128_from_any")]
+    max_total_prepaid_gas: u128,
+}
+
+/// Fetch the live `storage_remove_*` costs and tx-size limit from the chain.
+/// Reads only the fields we need so the deserialization isn't coupled to the
+/// rest of the runtime-config shape.
+pub async fn fetch_protocol_constants(client: &JsonRpcClient) -> Result<ProtocolConstants> {
     let block_ref = BlockReference::Finality(Finality::Final);
     let request = near_jsonrpc_client::methods::any::<
         std::result::Result<ProtocolConfigPartial, RpcProtocolConfigError>,
@@ -93,7 +112,12 @@ pub async fn fetch_gas_constants(client: &JsonRpcClient) -> Result<GasConstants>
     let response = client.call(request).await.map_err(|err| {
         color_eyre::eyre::eyre!("Failed to fetch protocol config: {err}")
     })?;
-    Ok(response.runtime_config.wasm_config.ext_costs)
+    let wasm = response.runtime_config.wasm_config;
+    Ok(ProtocolConstants {
+        gas: wasm.ext_costs,
+        max_transaction_size: wasm.limit_config.max_transaction_size,
+        max_total_prepaid_gas: wasm.limit_config.max_total_prepaid_gas,
+    })
 }
 
 /// Estimated gas cost of removing a single key, including the +30% safety
@@ -126,47 +150,19 @@ pub fn estimate_total_gas(entries: &[StateEntry], c: &GasConstants) -> u128 {
         .sum()
 }
 
-/// Pack entries into batches, each ≤ `target_gas`. Streaming-greedy:
-/// process in arrival order, close the current batch when adding the
-/// next entry would overflow. A single oversized entry (one whose
-/// `est > target_gas` alone) is placed in its own batch — the
-/// `!current.is_empty()` guard prevents an infinite "close empty,
-/// start empty, overflow again" loop.
-pub fn plan_batches(
-    entries: &[StateEntry],
-    target_gas: u128,
-    c: &GasConstants,
-) -> Vec<Vec<Vec<u8>>> {
-    let mut batches: Vec<Vec<Vec<u8>>> = Vec::new();
-    let mut current: Vec<Vec<u8>> = Vec::new();
-    let mut current_gas: u128 = 0;
-
-    for entry in entries {
-        let est = estimate_key_gas(entry.key.len(), entry.value_bytes, c);
-        if current_gas + est > target_gas && !current.is_empty() {
-            batches.push(std::mem::take(&mut current));
-            current_gas = 0;
-        }
-        current.push(entry.key.clone());
-        current_gas += est;
-    }
-    if !current.is_empty() {
-        batches.push(current);
-    }
-    batches
+/// Conservative upper bound on the borsh-serialized size of the SignedTransaction
+/// that will carry `actions` between an account and itself. Used to preflight
+/// against `max_transaction_size` before we hand the tx to the signer chain.
+pub fn estimate_transaction_size(actions: &[Action], account_id: &AccountId) -> Result<usize> {
+    let actions_bytes = borsh::to_vec(actions)
+        .map_err(|e| eyre!("Failed to borsh-serialize actions: {e}"))?;
+    Ok(actions_bytes.len() + TX_WRAPPER_OVERHEAD_BYTES + 2 * account_id.as_str().len())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Per-batch budget the planner is exercised against in these
-    /// tests — small enough to force splitting on the inputs used.
-    /// Independent of the production `MAX_CLEAN_GAS` constant.
-    const TEST_TARGET_GAS: u128 = 28_000_000_000_000;
-
-    // Sample constants matching what we observed empirically from
-    // testnet's protocol_config (close to nearcore defaults).
     fn constants() -> GasConstants {
         GasConstants {
             storage_remove_base: 53_473_030_500,
@@ -190,14 +186,14 @@ mod tests {
         assert_eq!(estimate_key_gas(5, 0, &constants()), raw_per_key(5, 0));
     }
 
-    fn entry(k: usize, v: usize) -> StateEntry {
-        StateEntry { key: vec![0; k], value_bytes: v }
-    }
-
     #[test]
     fn estimate_total_gas_is_sum_of_per_key() {
         let c = constants();
-        let entries = vec![entry(10, 50), entry(20, 200), entry(40, 4096)];
+        let entries = vec![
+            StateEntry { key: vec![0; 10], value_bytes: 50 },
+            StateEntry { key: vec![0; 20], value_bytes: 200 },
+            StateEntry { key: vec![0; 40], value_bytes: 4096 },
+        ];
         let expected: u128 = entries
             .iter()
             .map(|e| estimate_key_gas(e.key.len(), e.value_bytes, &c))
@@ -207,79 +203,30 @@ mod tests {
     }
 
     #[test]
-    fn empty_input_yields_no_batches() {
-        let batches = plan_batches(&[], TEST_TARGET_GAS, &constants());
-        assert!(batches.is_empty());
-    }
+    fn estimate_transaction_size_covers_payload_plus_overhead() {
+        use near_primitives::action::{DeployContractAction, FunctionCallAction};
 
-    #[test]
-    fn small_entries_pack_into_one_batch() {
-        let entries: Vec<_> = (0..5).map(|i| entry(8 + i, 50)).collect();
-        let batches = plan_batches(&entries, TEST_TARGET_GAS, &constants());
-        assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0].len(), 5);
-    }
-
-    #[test]
-    fn splits_at_budget_boundary_for_uniform_entries() {
-        let per_key = estimate_key_gas(20, 3072, &constants());
-        let per_batch = (TEST_TARGET_GAS / per_key) as usize;
-        let total = per_batch * 2 + 1;
-        let entries: Vec<_> = (0..total).map(|_| entry(20, 3072)).collect();
-        let batches = plan_batches(&entries, TEST_TARGET_GAS, &constants());
-        assert_eq!(batches.len(), 3);
-        assert_eq!(batches[0].len(), per_batch);
-        assert_eq!(batches[1].len(), per_batch);
-        assert_eq!(batches[2].len(), 1);
-    }
-
-    #[test]
-    fn oversized_solo_entry_gets_its_own_batch() {
-        // Derive the minimum value-bytes that pushes one entry above TARGET.
-        let c = constants();
-        let raw_cap = TEST_TARGET_GAS * 100 / SAFETY_FACTOR_PCT;
-        let overhead = c.storage_remove_base + 10 * c.storage_remove_key_byte;
-        let oversized = ((raw_cap - overhead) / c.storage_remove_ret_value_byte + 1) as usize;
-
-        let entries = vec![
-            entry(10, 50),
-            entry(10, oversized),
-            entry(10, 50),
+        let wasm = vec![0u8; 100_000];
+        let args = vec![0u8; 5_000];
+        let actions = vec![
+            Action::DeployContract(DeployContractAction { code: wasm.clone() }),
+            Action::FunctionCall(Box::new(FunctionCallAction {
+                method_name: "clean".to_string(),
+                args: args.clone(),
+                gas: near_primitives::gas::Gas::from_gas(990_000_000_000_000),
+                deposit: near_token::NearToken::from_yoctonear(0),
+            })),
         ];
-        let batches = plan_batches(&entries, TEST_TARGET_GAS, &c);
-        assert_eq!(batches.len(), 3);
-        for b in &batches {
-            assert_eq!(b.len(), 1);
-        }
-    }
+        let account_id: AccountId = "example.testnet".parse().unwrap();
+        let size = estimate_transaction_size(&actions, &account_id).unwrap();
 
-    #[test]
-    fn mixed_sizes_respect_target() {
-        let entries = vec![
-            entry(20, 500),
-            entry(20, 8_000),
-            entry(20, 800_000),
-            entry(20, 800_000),
-        ];
-        let c = constants();
-        let batches = plan_batches(&entries, TEST_TARGET_GAS, &c);
-
-        // Re-derive each batch's gas from the original entries (we held
-        // onto sizes; plan_batches returns only keys).
-        let mut idx = 0;
-        for batch in &batches {
-            let batch_entries = &entries[idx..idx + batch.len()];
-            idx += batch.len();
-            if batch.len() == 1 {
-                continue; // oversized solo allowed to exceed
-            }
-            let sum: u128 = batch_entries
-                .iter()
-                .map(|e| estimate_key_gas(e.key.len(), e.value_bytes, &c))
-                .sum();
-            assert!(sum < TEST_TARGET_GAS, "batch over target: {sum}");
-        }
-        let total_keys: usize = batches.iter().map(|b| b.len()).sum();
-        assert_eq!(total_keys, entries.len());
+        // Must be at least the raw payload size (wasm + args).
+        assert!(size >= wasm.len() + args.len());
+        // And must include the wrapper overhead + 2× account_id bytes.
+        let actions_bytes = borsh::to_vec(&actions).unwrap();
+        assert_eq!(
+            size,
+            actions_bytes.len() + TX_WRAPPER_OVERHEAD_BYTES + 2 * account_id.as_str().len(),
+        );
     }
 }

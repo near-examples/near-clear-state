@@ -1,8 +1,8 @@
 //! State-reading helpers around the `view_state` RPC.
 //!
 //! `read_state` is the preflight: it returns every key/value-byte-count for
-//! the target account so [`plan::plan_batches`](crate::plan::plan_batches)
-//! can pack them into gas-bounded `clean()` calls.
+//! the target account so the wipe transaction can attach the right gas
+//! budget and pass every key into `clean()`.
 
 use color_eyre::eyre::{Result, eyre};
 use near_jsonrpc_client::JsonRpcClient;
