@@ -4,9 +4,16 @@
 //! Flow per invocation:
 //!   1. Read state via ViewState RPC.
 //!   2. Fetch live `storage_remove_*` gas costs from protocol_config.
-//!   3. Pack keys into batches that fit `per_action_gas(max_calls)`.
-//!   4. Build one transaction = DeployContract(bundled wasm) + N FunctionCall("clean", ...).
+//!   3. Estimate the gas needed to remove every key; error out if it
+//!      exceeds `MAX_CLEAN_GAS` (single-tx budget).
+//!   4. Build one transaction = DeployContract(bundled wasm)
+//!      + one FunctionCall("clean", all_keys) carrying `MAX_CLEAN_GAS`.
 //!   5. Hand it to near-cli-rs's signer chain.
+//!
+//! At 1000 Tgas/tx (protocol version 83+) a single call can remove a
+//! few megabytes of contract state, which is far above what `view_state`
+//! is willing to return. A multi-tx fallback for permissive-RPC,
+//! many-MB cases is intentional future work — see [`plan::plan_batches`].
 
 pub mod cleanup;
 pub mod plan;
@@ -24,12 +31,15 @@ const BUNDLED_WASM: &[u8] = include_bytes!("../wasm/state_cleanup.wasm");
 #[interactive_clap(input_context = near_cli_rs::GlobalContext)]
 #[interactive_clap(output_context = CleanStateContext)]
 pub struct CleanStateCommand {
+    /// Quiet mode — suppress non-essential output.
+    #[interactive_clap(long)]
+    pub quiet: bool,
+    /// TEACH-ME mode — print detailed explanations of what the CLI is doing.
+    #[interactive_clap(long)]
+    pub teach_me: bool,
     #[interactive_clap(skip_default_input_arg)]
     /// What is the contract account ID to wipe?
     account_id: near_cli_rs::types::account_id::AccountId,
-    #[interactive_clap(skip_default_input_arg)]
-    /// Maximum number of clean() calls in the single deploy+wipe transaction
-    max_calls: u64,
     #[interactive_clap(named_arg)]
     /// Select network
     network_config: near_cli_rs::network_for_transaction::NetworkForTransactionArgs,
@@ -44,22 +54,12 @@ impl CleanStateCommand {
             "What is the contract account ID to wipe?",
         )
     }
-
-    fn input_max_calls(_context: &near_cli_rs::GlobalContext) -> Result<Option<u64>> {
-        let value = inquire::CustomType::<u64>::new(
-            "Maximum number of clean() calls (default 10):",
-        )
-        .with_default(10)
-        .prompt()?;
-        Ok(Some(value))
-    }
 }
 
 #[derive(Debug, Clone)]
 pub struct CleanStateContext {
     global_context: near_cli_rs::GlobalContext,
     account_id: near_primitives::types::AccountId,
-    max_calls: u64,
 }
 
 impl CleanStateContext {
@@ -67,13 +67,9 @@ impl CleanStateContext {
         previous_context: near_cli_rs::GlobalContext,
         scope: &<CleanStateCommand as interactive_clap::ToInteractiveClapContextScope>::InteractiveClapContextScope,
     ) -> Result<Self> {
-        if scope.max_calls == 0 {
-            return Err(eyre!("`--max-calls` must be at least 1"));
-        }
         Ok(Self {
             global_context: previous_context,
             account_id: scope.account_id.clone().into(),
-            max_calls: scope.max_calls,
         })
     }
 }
@@ -86,7 +82,6 @@ struct CleanArgs<'a> {
 impl From<CleanStateContext> for near_cli_rs::commands::ActionContext {
     fn from(item: CleanStateContext) -> Self {
         let account_id = item.account_id.clone();
-        let max_calls: u64 = item.max_calls;
 
         let get_prepopulated_transaction_after_getting_network_callback: near_cli_rs::commands::GetPrepopulatedTransactionAfterGettingNetworkCallback =
             std::sync::Arc::new(move |network_config| {
@@ -95,7 +90,7 @@ impl From<CleanStateContext> for near_cli_rs::commands::ActionContext {
                     .build()
                     .map_err(|e| eyre!("Failed to start tokio runtime: {e}"))?;
 
-                runtime.block_on(build_transaction(network_config, &account_id, max_calls))
+                runtime.block_on(build_transaction(network_config, &account_id))
             });
 
         Self {
@@ -120,7 +115,6 @@ impl From<CleanStateContext> for near_cli_rs::commands::ActionContext {
 async fn build_transaction(
     network_config: &near_cli_rs::config::NetworkConfig,
     account_id: &near_primitives::types::AccountId,
-    max_calls: u64,
 ) -> Result<near_cli_rs::commands::PrepopulatedTransaction> {
     let client = network_config.json_rpc_client();
 
@@ -133,54 +127,50 @@ async fn build_transaction(
         ));
     }
 
-    let max_calls_u32 = u32::try_from(max_calls)
-        .map_err(|_| eyre!("--max-calls is unreasonably large"))?;
-    let per_action = plan::per_action_gas(max_calls_u32);
-    let batches = plan::plan_batches(&entries, per_action, &gas_constants);
-
-    if batches.len() > max_calls as usize {
+    // Single-tx model: refuse if the wipe wouldn't fit in one tx. The
+    // multi-tx fallback (chunk across N txs using plan::plan_batches) is
+    // future work — needed only when a permissive RPC returns many MB.
+    let estimated = plan::estimate_total_gas(&entries, &gas_constants);
+    if estimated > plan::MAX_CLEAN_GAS {
         return Err(eyre!(
-            "Planning produced {} batches but --max-calls is {max_calls}. \
-             Raise --max-calls or split the wipe across multiple invocations.",
-            batches.len(),
+            "State is too large to wipe in a single transaction \
+             (estimated {estimated_tgas:.1} Tgas, budget {budget_tgas:.0} Tgas). \
+             Multi-transaction wipes are not yet supported.",
+            estimated_tgas = estimated as f64 / 1e12,
+            budget_tgas = plan::MAX_CLEAN_GAS as f64 / 1e12,
         ));
     }
 
     eprintln!(
-        "Planning {} batch(es) covering {} key(s) across {account_id}.",
-        batches.len(),
+        "Wiping {} key(s) from {account_id} (est. {:.1} Tgas).",
         entries.len(),
+        estimated as f64 / 1e12,
     );
 
-    let mut actions: Vec<Action> = Vec::with_capacity(batches.len() + 1);
-    actions.push(Action::DeployContract(DeployContractAction {
-        code: BUNDLED_WASM.to_vec(),
-    }));
+    let encoded: Vec<String> = entries
+        .iter()
+        .map(|e| {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD.encode(&e.key)
+        })
+        .collect();
+    let args = CleanArgs {
+        keys: encoded.iter().map(String::as_str).collect(),
+    };
+    let args_bytes = serde_json::to_vec(&args)
+        .map_err(|e| eyre!("Failed to serialize clean() args: {e}"))?;
 
-    let per_action_gas = near_primitives::gas::Gas::from_gas(per_action as u64);
-    let zero_deposit = near_token::NearToken::from_yoctonear(0);
-
-    for batch in &batches {
-        let encoded: Vec<String> = batch
-            .iter()
-            .map(|k| {
-                use base64::Engine as _;
-                base64::engine::general_purpose::STANDARD.encode(k)
-            })
-            .collect();
-        let args = CleanArgs {
-            keys: encoded.iter().map(String::as_str).collect(),
-        };
-        let args_bytes = serde_json::to_vec(&args)
-            .map_err(|e| eyre!("Failed to serialize clean() args: {e}"))?;
-
-        actions.push(Action::FunctionCall(Box::new(FunctionCallAction {
+    let actions = vec![
+        Action::DeployContract(DeployContractAction {
+            code: BUNDLED_WASM.to_vec(),
+        }),
+        Action::FunctionCall(Box::new(FunctionCallAction {
             method_name: "clean".to_string(),
             args: args_bytes,
-            gas: per_action_gas,
-            deposit: zero_deposit,
-        })));
-    }
+            gas: near_primitives::gas::Gas::from_gas(plan::MAX_CLEAN_GAS as u64),
+            deposit: near_token::NearToken::from_yoctonear(0),
+        })),
+    ];
 
     Ok(near_cli_rs::commands::PrepopulatedTransaction {
         signer_id: account_id.clone(),

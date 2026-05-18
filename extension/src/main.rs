@@ -28,12 +28,17 @@ fn main() -> CliResult {
         Err(error) => error.exit(),
     };
 
-    near_cli_rs::setup_tracing(Verbosity::Interactive)?;
+    let verbosity = match (cli.quiet, cli.teach_me) {
+        (true, _) => Verbosity::Quiet,
+        (false, true) => Verbosity::TeachMe,
+        (false, false) => Verbosity::Interactive,
+    };
+    near_cli_rs::setup_tracing(verbosity)?;
 
     let global_context = near_cli_rs::GlobalContext {
         config,
         offline: false,
-        verbosity: Verbosity::Interactive,
+        verbosity,
     };
 
     match <CleanStateCommand as interactive_clap::FromCli>::from_cli(Some(cli), global_context) {

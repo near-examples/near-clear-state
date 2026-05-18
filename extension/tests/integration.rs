@@ -165,7 +165,6 @@ async fn run_test_body(
     let status = Command::new(env!("CARGO_BIN_EXE_near-clean-state"))
         .args([
             sub_id.as_str(),
-            "10",
             "network-config",
             "testnet",
             "sign-with-plaintext-private-key",

@@ -66,8 +66,7 @@ fn map_view_state_error(err: JsonRpcError<RpcQueryError>) -> color_eyre::eyre::R
     if rendered.contains("too large") || inner.contains("too large") {
         return eyre!(
             "Account state is too large for this RPC's `view_state` cap.\n\
-             Configure a permissive RPC (e.g. https://rpc.intear.tech) in \
-             ~/.near/config.toml and retry.",
+             Try configuring a different RPC with `near config edit-connection` and retry.",
         );
     }
     eyre!("Failed to fetch ViewState: {err}")

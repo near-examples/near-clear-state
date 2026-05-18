@@ -2,9 +2,11 @@
 name = "near-clean-state"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.88"
 description = "near-cli-rs extension that wipes a contract account's on-chain state without deleting the account."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/PiVortex/contract-cleaner"
+homepage = "https://github.com/PiVortex/contract-cleaner"
 keywords = ["near", "near-cli-rs", "extension", "contract", "state"]
 categories = ["command-line-utilities"]
 

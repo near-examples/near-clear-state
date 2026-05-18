@@ -1,8 +1,18 @@
-//! Gas-aware batch planner for the state-cleanup wipe flow.
+//! Gas estimation for the state-cleanup wipe flow.
 //!
-//! Ported from `shade-agent-cli/src/utils/state-cleanup.js`. Gas constants
-//! are pulled from the live chain via `EXPERIMENTAL_protocol_config` rather
-//! than hardcoded.
+//! Gas constants are pulled from the live chain via
+//! `EXPERIMENTAL_protocol_config` rather than hardcoded.
+//!
+//! Current model: the entire wipe goes in **one** transaction — one
+//! `DeployContract` action + one `FunctionCall("clean", all_keys)`
+//! action with the full gas budget attached. With protocol version 83
+//! lifting the per-tx cap to 1000 Tgas, a single call can clear
+//! several megabytes of contract state, which comfortably covers any
+//! state size that `view_state` is willing to return.
+//!
+//! [`plan_batches`] is retained for the future multi-tx fallback —
+//! useful when a permissive RPC returns a state larger than one tx
+//! can wipe.
 
 use color_eyre::eyre::Result;
 use near_jsonrpc_client::JsonRpcClient;
@@ -10,14 +20,11 @@ use near_jsonrpc_client::methods::EXPERIMENTAL_protocol_config::RpcProtocolConfi
 use near_primitives::types::{BlockReference, Finality};
 use serde::Deserialize;
 
-/// Total gas budget for the deploy+clean() transaction. 290 Tgas leaves
-/// 10 Tgas of slack under the 300 Tgas per-tx protocol cap.
-pub const TOTAL_TX_GAS: u128 = 290_000_000_000_000;
-
-/// Gas budget reserved for the `DeployContract` action's processing
-/// overhead. The deploy itself doesn't consume attached gas in the same
-/// way a function call does, but the action takes some setup cost.
-pub const DEPLOY_OVERHEAD_TGAS: u128 = 10_000_000_000_000;
+/// Gas attached to the single `clean(keys=[...])` call. 990 Tgas leaves
+/// ~10 Tgas of slack under the protocol's 1000 Tgas per-tx cap to cover
+/// action-level overhead (function-call base ~1 Ggas, receipt creation
+/// ~216 Mgas) plus headroom for future protocol param changes.
+pub const MAX_CLEAN_GAS: u128 = 990_000_000_000_000;
 
 /// +30% multiplier over the published `storage_remove` host-function cost.
 /// Covers wasm execution (the contract's `for` loop + base64 decode) and
@@ -110,11 +117,13 @@ pub struct StateEntry {
     pub value_bytes: usize,
 }
 
-/// Per-action gas budget given a max-batch ceiling. The total tx gas
-/// budget (`TOTAL_TX_GAS` minus deploy overhead) is divided evenly
-/// across `max_calls` potential FunctionCalls.
-pub fn per_action_gas(max_calls: u32) -> u128 {
-    (TOTAL_TX_GAS - DEPLOY_OVERHEAD_TGAS) / u128::from(max_calls.max(1))
+/// Total estimated gas (with safety factor) to clean `entries` in one
+/// `clean()` call. Used to verify the wipe fits in a single tx.
+pub fn estimate_total_gas(entries: &[StateEntry], c: &GasConstants) -> u128 {
+    entries
+        .iter()
+        .map(|e| estimate_key_gas(e.key.len(), e.value_bytes, c))
+        .sum()
 }
 
 /// Pack entries into batches, each ≤ `target_gas`. Streaming-greedy:
@@ -151,6 +160,11 @@ pub fn plan_batches(
 mod tests {
     use super::*;
 
+    /// Per-batch budget the planner is exercised against in these
+    /// tests — small enough to force splitting on the inputs used.
+    /// Independent of the production `MAX_CLEAN_GAS` constant.
+    const TEST_TARGET_GAS: u128 = 28_000_000_000_000;
+
     // Sample constants matching what we observed empirically from
     // testnet's protocol_config (close to nearcore defaults).
     fn constants() -> GasConstants {
@@ -181,15 +195,27 @@ mod tests {
     }
 
     #[test]
+    fn estimate_total_gas_is_sum_of_per_key() {
+        let c = constants();
+        let entries = vec![entry(10, 50), entry(20, 200), entry(40, 4096)];
+        let expected: u128 = entries
+            .iter()
+            .map(|e| estimate_key_gas(e.key.len(), e.value_bytes, &c))
+            .sum();
+        assert_eq!(estimate_total_gas(&entries, &c), expected);
+        assert_eq!(estimate_total_gas(&[], &c), 0);
+    }
+
+    #[test]
     fn empty_input_yields_no_batches() {
-        let batches = plan_batches(&[], per_action_gas(10), &constants());
+        let batches = plan_batches(&[], TEST_TARGET_GAS, &constants());
         assert!(batches.is_empty());
     }
 
     #[test]
     fn small_entries_pack_into_one_batch() {
         let entries: Vec<_> = (0..5).map(|i| entry(8 + i, 50)).collect();
-        let batches = plan_batches(&entries, per_action_gas(10), &constants());
+        let batches = plan_batches(&entries, TEST_TARGET_GAS, &constants());
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].len(), 5);
     }
@@ -197,10 +223,10 @@ mod tests {
     #[test]
     fn splits_at_budget_boundary_for_uniform_entries() {
         let per_key = estimate_key_gas(20, 3072, &constants());
-        let per_batch = (per_action_gas(10) / per_key) as usize;
+        let per_batch = (TEST_TARGET_GAS / per_key) as usize;
         let total = per_batch * 2 + 1;
         let entries: Vec<_> = (0..total).map(|_| entry(20, 3072)).collect();
-        let batches = plan_batches(&entries, per_action_gas(10), &constants());
+        let batches = plan_batches(&entries, TEST_TARGET_GAS, &constants());
         assert_eq!(batches.len(), 3);
         assert_eq!(batches[0].len(), per_batch);
         assert_eq!(batches[1].len(), per_batch);
@@ -211,7 +237,7 @@ mod tests {
     fn oversized_solo_entry_gets_its_own_batch() {
         // Derive the minimum value-bytes that pushes one entry above TARGET.
         let c = constants();
-        let raw_cap = per_action_gas(10) * 100 / SAFETY_FACTOR_PCT;
+        let raw_cap = TEST_TARGET_GAS * 100 / SAFETY_FACTOR_PCT;
         let overhead = c.storage_remove_base + 10 * c.storage_remove_key_byte;
         let oversized = ((raw_cap - overhead) / c.storage_remove_ret_value_byte + 1) as usize;
 
@@ -220,7 +246,7 @@ mod tests {
             entry(10, oversized),
             entry(10, 50),
         ];
-        let batches = plan_batches(&entries, per_action_gas(10), &c);
+        let batches = plan_batches(&entries, TEST_TARGET_GAS, &c);
         assert_eq!(batches.len(), 3);
         for b in &batches {
             assert_eq!(b.len(), 1);
@@ -236,7 +262,7 @@ mod tests {
             entry(20, 800_000),
         ];
         let c = constants();
-        let batches = plan_batches(&entries, per_action_gas(10), &c);
+        let batches = plan_batches(&entries, TEST_TARGET_GAS, &c);
 
         // Re-derive each batch's gas from the original entries (we held
         // onto sizes; plan_batches returns only keys).
@@ -251,7 +277,7 @@ mod tests {
                 .iter()
                 .map(|e| estimate_key_gas(e.key.len(), e.value_bytes, &c))
                 .sum();
-            assert!(sum < per_action_gas(10), "batch over target: {sum}");
+            assert!(sum < TEST_TARGET_GAS, "batch over target: {sum}");
         }
         let total_keys: usize = batches.iter().map(|b| b.len()).sum();
         assert_eq!(total_keys, entries.len());

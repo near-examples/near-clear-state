@@ -3,13 +3,58 @@
 A [near-cli-rs](https://github.com/near/near-cli-rs) extension that wipes a
 contract account's on-chain state without deleting the account.
 
+Interactive mode:
+
+```bash
+near clean-state
 ```
-near clean-state <account-id> --max-calls 10 network-config testnet sign-with-keychain send
+
+Full command: 
+
+```bash
+near clean-state <account-id> network-config testnet sign-with-keychain send
 ```
 
 Under the hood it deploys a tiny `clean()` contract to the target account
-and then function-calls `clean(keys)` for every batch of storage keys, all
-in a single transaction.
+and function-calls `clean(keys=[…])` with every key in one transaction.
+
+If the tool errors with `Account state is too large for this RPC's view_state cap`, switch to an RPC with a larger `view_state` cap via `near config edit-connection`. Intear's RPCs are a good option:
+
+- Mainnet: `https://rpc.intea.rs`
+- Testnet: `https://testnet-rpc.intea.rs`
+
+## Install
+
+Directly from this GitHub repo:
+
+```
+cargo install --git https://github.com/PiVortex/contract-cleaner near-clean-state
+```
+
+Or from a local checkout:
+
+```
+git clone https://github.com/PiVortex/contract-cleaner
+cargo install --path contract-cleaner/extension
+```
+
+Both put a `near-clean-state` binary in `~/.cargo/bin/`. As long as that
+directory is on your `$PATH` (alongside the `near` binary itself),
+`near` resolves `near clean-state …` to this extension via its
+`near-${command}` PATH lookup.
+
+You can also invoke it directly — `near-clean-state …` is identical in
+behaviour to `near clean-state …`.
+
+### Verifying installation
+
+```
+which near-clean-state
+near clean-state --help
+```
+
+The second command should print the usage block from this extension
+(not near-cli-rs's own help).
 
 ## Repo layout
 
@@ -17,17 +62,10 @@ in a single transaction.
 |------|------------|
 | `contract/` | The `state-cleanup` contract source (near-sdk 5.26.1). Its own `cargo-near` project. |
 | `extension/wasm/state_cleanup.wasm` | The reproducibly-built wasm embedded into the extension binary. |
-| `extension/src/` | The `near-clean-state` Rust extension (`cargo install near-clean-state`). |
+| `extension/src/` | The `near-clean-state` Rust extension. |
 | `scripts/verify-wasm.sh` | Read the embedded build-context commit from the committed wasm, check it out into a temp worktree, rebuild reproducibly, and diff. Requires docker. |
 
-## Build & install
-
-```
-cargo install --path extension
-```
-
-Add `~/.cargo/bin` to your `PATH` so `near` can find the binary via the
-extension-dispatch lookup (`near-${command}`).
+This extention intentionally attempts to clean all state in a single transaction to fit with the near-cli-rs model of one command equalling one transaction. It's assumed that any limitations of cleaning the contract will come from RPCs not being able to serve a large enough view_state rather than the call running out of gas.
 
 ## Verifying the bundled wasm
 
@@ -36,9 +74,7 @@ with a docker-pinned `cargo-near` toolchain at commit:
 
 > **`a240b4fd852840351a04d18895aa9a27ddafc4f1`**
 
-To audit the source it was built from, look at
-[`contract/src/`](https://github.com/PiVortex/contract-cleaner/tree/a240b4fd852840351a04d18895aa9a27ddafc4f1/contract/src)
-at that commit. Locally, that's:
+To audit the source it was built from:
 
 ```
 git show a240b4fd852840351a04d18895aa9a27ddafc4f1:contract/src/lib.rs
@@ -57,21 +93,3 @@ metadata, checks that commit out into a temp worktree, runs
 
 Whenever the bundled wasm is updated, the commit above is updated
 along with it.
-
-## What it does
-
-1. Reads every storage entry on the target account via `view_state` RPC.
-2. Fetches live `storage_remove_*` gas costs from `EXPERIMENTAL_protocol_config`.
-3. Packs keys into batches that each fit inside `(290 Tgas - 10 Tgas) / max_calls`.
-4. Builds one transaction with `DeployContract(bundled wasm)` followed by
-   N × `FunctionCall("clean", { keys })`, signs it, and sends it.
-
-If `view_state` is capped (FastNEAR / official RPCs return "state is too
-large" at ~50 KB), the extension errors out with a message pointing at
-`~/.near/config.toml` and recommending a permissive RPC.
-
-## Origin
-
-This repo started as [`PiVortex/contract-cleaner`](https://github.com/PiVortex/contract-cleaner),
-a JS tool for the same job. The legacy JS implementation has been removed
-in favour of the Rust extension; the git history is preserved.

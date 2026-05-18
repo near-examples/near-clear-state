@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 #
-# Verify that extension/wasm/state_cleanup.wasm matches a reproducible
-# build of its source.
+# Verify that a `state_cleanup.wasm` matches a reproducible build of
+# its source.
+#
+# Usage:
+#   ./scripts/verify-wasm.sh [path/to/state_cleanup.wasm]
+#
+# Default path is `extension/wasm/state_cleanup.wasm` (the wasm
+# committed in this repo). Pass another path to verify a copy obtained
+# elsewhere (e.g. extracted from an installed binary).
 #
 # Why this script exists
 # ----------------------
@@ -13,7 +20,7 @@
 # embedded hash, even though the actual code bytes are identical.
 #
 # To verify reproducibly we therefore have to rebuild *at the same
-# commit the committed wasm was built at*, not at current HEAD. We read
+# commit the supplied wasm was built at*, not at current HEAD. We read
 # that commit straight out of the wasm itself — it's the only piece of
 # info needed to find the exact source state to rebuild from.
 #
@@ -26,12 +33,16 @@ set -euo pipefail
 # Resolve repo root regardless of where the script is invoked from.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-COMMITTED="$ROOT/extension/wasm/state_cleanup.wasm"
+
+# Optional first arg overrides the wasm path. Default = in-repo copy.
+COMMITTED="${1:-$ROOT/extension/wasm/state_cleanup.wasm}"
 
 if [ ! -f "$COMMITTED" ]; then
   echo "Missing $COMMITTED" >&2
+  echo "Usage: $0 [path/to/state_cleanup.wasm]" >&2
   exit 1
 fi
+echo "Verifying: $COMMITTED"
 
 # Step 1 — find the build-context commit.
 #
