@@ -114,9 +114,9 @@ async fn build_transaction(
     let entries = cleanup::read_state(&client, account_id).await?;
 
     if entries.is_empty() {
-        return Err(eyre!(
-            "Account <{account_id}> has no contract state to clean.",
-        ));
+        // Exit 0 so wipe-then-deploy scripts can safely re-run after a successful wipe.
+        eprintln!("Account <{account_id}> already has empty contract state — nothing to wipe.");
+        std::process::exit(0);
     }
 
     let estimated = plan::estimate_total_gas(&entries, &protocol_constants.gas);
