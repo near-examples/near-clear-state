@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["extension"]
+# contract/ and test-contracts/ are their own cargo-near projects
+# (separate toolchain + reproducible build flow) and must stay out of
+# the extension workspace.
+exclude = ["contract", "test-contracts/state-filler"]
+
+# The profile that 'cargo dist' will build with — matches near-cli-rs /
+# near-validator-cli-rs so distributed binaries get the same treatment.
+[profile.dist]
+inherits = "release"
+lto = "thin"

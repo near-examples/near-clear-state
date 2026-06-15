@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+#
+# Verify that a `state_cleanup.wasm` matches a reproducible build of
+# its source.
+#
+# Usage:
+#   ./scripts/verify-wasm.sh [path/to/state_cleanup.wasm]
+#
+# Default path is `extension/wasm/state_cleanup.wasm` (the wasm
+# committed in this repo). Pass another path to verify a copy obtained
+# elsewhere (e.g. extracted from an installed binary).
+#
+# Why this script exists
+# ----------------------
+# `cargo near build reproducible-wasm` builds the contract inside a
+# docker image pinned by digest. Same source + same image => same bytes.
+# But the resulting wasm also has the *build-context commit hash* baked
+# into its NEP-330 metadata blob (as a github tree URL). That means a
+# fresh build at any other commit produces a wasm with a different
+# embedded hash, even though the actual code bytes are identical.
+#
+# To verify reproducibly we therefore have to rebuild *at the same
+# commit the supplied wasm was built at*, not at current HEAD. We read
+# that commit straight out of the wasm itself — it's the only piece of
+# info needed to find the exact source state to rebuild from.
+#
+# Requires:
+#   - docker (cargo-near pulls the pinned sourcescan/cargo-near image)
+#   - the embedded commit reachable in this repo's git history
+
+set -euo pipefail
+
+# Resolve repo root regardless of where the script is invoked from.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Anchor of trust: the commit we expect the committed wasm to have been
+# built from. Updated in lockstep with extension/wasm/state_cleanup.wasm.
+# Without this assertion an attacker could swap the wasm AND rewrite its
+# embedded source URL to point at any commit that reproducibly builds to
+# those bytes — verification would silently follow them. Pinning the
+# commit here anchors trust in this script (reviewable in git history)
+# instead of in the opaque wasm.
+EXPECTED_COMMIT="92c602693aa0c19b34e2704ef9688e12f2ec4f1b"
+
+# Optional first arg overrides the wasm path. Default = in-repo copy.
+COMMITTED="${1:-$ROOT/extension/wasm/state_cleanup.wasm}"
+
+if [ ! -f "$COMMITTED" ]; then
+  echo "Missing $COMMITTED" >&2
+  echo "Usage: $0 [path/to/state_cleanup.wasm]" >&2
+  exit 1
+fi
+echo "Verifying: $COMMITTED"
+
+# Step 1 — find the build-context commit.
+#
+# cargo-near embeds a JSON metadata blob into the wasm that includes a
+# github tree URL pointing at the source commit:
+#   "https://github.com/<owner>/<repo>/tree/<40-hex-commit>"
+#
+# `strings` walks the binary and pulls out printable runs; `grep -oE`
+# isolates the URL. There can be other 40-hex blobs elsewhere in the
+# wasm (cryptographic hashes etc.) so matching against the URL prefix
+# is safer than grepping for bare hex.
+URL="$(strings "$COMMITTED" \
+  | grep -oE 'https://github\.com/[^"]+/tree/[0-9a-f]{40}' \
+  | head -n 1 || true)"
+
+if [ -z "$URL" ]; then
+  echo "Could not find an embedded source URL in $COMMITTED." >&2
+  echo "Was it built with cargo-near reproducible-wasm?" >&2
+  exit 1
+fi
+
+# `${URL##*/tree/}` strips the longest prefix ending in "/tree/", leaving
+# only the 40-char commit hash.
+COMMIT="${URL##*/tree/}"
+echo "Committed wasm was built at: $URL"
+
+# Step 1b — assert the embedded commit matches what this script expects.
+# This is the trust anchor: if the wasm has been swapped for one pointing
+# at a different commit, refuse to verify regardless of whether that other
+# commit happens to reproducibly build to the swapped bytes.
+if [ "$COMMIT" != "$EXPECTED_COMMIT" ]; then
+  echo "Embedded build-context commit does not match expected." >&2
+  echo "  expected: $EXPECTED_COMMIT" >&2
+  echo "  embedded: $COMMIT" >&2
+  exit 1
+fi
+
+# Step 2 — confirm we have that commit locally.
+#
+# `git cat-file -e <rev>^{commit}` succeeds if the named commit object
+# exists in this repo's object database. If it doesn't, the user needs
+# to fetch from origin (or the commit was never pushed anywhere).
+cd "$ROOT"
+if ! git cat-file -e "$COMMIT^{commit}" 2>/dev/null; then
+  echo "Commit $COMMIT is not in this repo's history." >&2
+  echo "Try: git fetch origin" >&2
+  exit 1
+fi
+
+# Step 3 — check out that commit into a throwaway worktree.
+#
+# We need an on-disk copy of the source at the build-context commit
+# without disturbing the user's main working tree (which may have
+# uncommitted changes). `git worktree add --detach` materialises a
+# detached-HEAD checkout in a separate directory backed by the same
+# .git. The EXIT trap removes it so we leave nothing behind.
+WORKTREE="$(mktemp -d)"
+trap 'git worktree remove --force "$WORKTREE" 2>/dev/null || rm -rf "$WORKTREE"' EXIT
+
+git worktree add --detach "$WORKTREE" "$COMMIT"
+
+# Step 4 — rebuild reproducibly.
+#
+# Inside the worktree's contract/ directory, run the same reproducible
+# build command that originally produced the committed wasm. cargo-near
+# spins up the pinned docker image, builds, then optionally runs
+# wasm-opt. The resulting wasm should be byte-identical to the
+# committed one (including the embedded metadata blob, since we're at
+# the same commit).
+( cd "$WORKTREE/contract" && cargo near build reproducible-wasm )
+
+# Step 5 — compare sha256s.
+#
+# EXPECTED = the sha of the pre-built wasm checked into the repo
+#            (what a verifier expects to see).
+# NEW      = the sha of the wasm we just rebuilt from source in the
+#            temp worktree.
+FRESH="$WORKTREE/contract/target/near/state_cleanup.wasm"
+if command -v sha256sum >/dev/null 2>&1; then
+  SHA256="sha256sum"
+elif command -v shasum >/dev/null 2>&1; then
+  SHA256="shasum -a 256"
+else
+  echo "Neither sha256sum nor shasum is available." >&2
+  exit 1
+fi
+EXPECTED="$($SHA256 "$COMMITTED" | awk '{print $1}')"
+NEW="$($SHA256 "$FRESH"          | awk '{print $1}')"
+
+echo
+echo "Expected (committed):      $EXPECTED"
+echo "New (rebuilt at $COMMIT):  $NEW"
+echo
+
+if [ "$EXPECTED" = "$NEW" ]; then
+  echo "wasm matches"
+  exit 0
+fi
+
+echo "MISMATCH"
+exit 1

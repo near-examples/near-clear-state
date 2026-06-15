@@ -1,0 +1,17 @@
+========================================================================
+NOTICE
+========================================================================
+
+THIS SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
+
+This project **has not been independently audited or security-reviewed**. It may contain bugs, vulnerabilities, or other defects that could result in unintended behavior, including but not limited to **loss of funds, tokens, or digital assets**.
+
+By using, deploying, or integrating this code, you acknowledge and agree that:
+
+- You assume all risks associated with its use; and
+
+- The authors, contributors, and maintainers are **not liable** for any direct, indirect, incidental, special, exemplary, or consequential damages (including loss of assets or profits).
+
+-------------------------------------------------------------------------------
+End of NOTICE
+-------------------------------------------------------------------------------
