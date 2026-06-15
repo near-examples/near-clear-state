@@ -41,7 +41,7 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # those bytes — verification would silently follow them. Pinning the
 # commit here anchors trust in this script (reviewable in git history)
 # instead of in the opaque wasm.
-EXPECTED_COMMIT="92c602693aa0c19b34e2704ef9688e12f2ec4f1b"
+EXPECTED_COMMIT="4a0bcb2016f4a59186023906adb8359af6d44ab2"
 
 # Optional first arg overrides the wasm path. Default = in-repo copy.
 COMMITTED="${1:-$ROOT/extension/wasm/state_cleanup.wasm}"
