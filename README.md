@@ -39,22 +39,28 @@ One-shot wipe in a single transaction, so bounded by three ceilings:
 
 ### Prerequisites
 
-[`near-cli-rs`](https://github.com/near/near-cli-rs) must already be installed and on your `$PATH` — this is an extension to it, not a standalone tool. 
+- [`near-cli-rs`](https://github.com/near/near-cli-rs) must already be installed and on your `$PATH` — this is an extension to it, not a standalone tool.
+- A Rust toolchain **≥ 1.88** (the extension is developed against 1.92). `cargo install` builds with your *default* toolchain and ignores the repo's `rust-toolchain.toml`, so if your default is older, install a newer one and prefix the commands below with it — e.g. `rustup toolchain install 1.92`, then `cargo +1.92 install …`.
 
 ### Installing the extension
 
 Directly from this GitHub repo:
 
 ```
-cargo install --git https://github.com/near-examples/near-clear-state near-clear-state
+cargo install --locked --git https://github.com/near-examples/near-clear-state near-clear-state
 ```
 
 Or from a local checkout:
 
 ```
 git clone https://github.com/near-examples/near-clear-state
-cargo install --path near-clear-state/extension
+cargo install --locked --path near-clear-state/extension
 ```
+
+`--locked` installs the exact dependency versions pinned in the committed
+`Cargo.lock`. Without it `cargo install` re-resolves to the latest compatible
+crates, some of which raise their minimum supported Rust version over time and
+will then fail to build on an otherwise-fine toolchain.
 
 Both put a `near-clear-state` binary in `~/.cargo/bin/`. As long as that
 directory is on your `$PATH` (alongside the `near` binary itself),
