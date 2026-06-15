@@ -91,7 +91,7 @@ The wasm at `extension/wasm/state_cleanup.wasm` was built reproducibly.
 To audit the exact source that produced it, check out the commit it was built in:
 
 ```
-git checkout 92c602693aa0c19b34e2704ef9688e12f2ec4f1b
+git checkout 4a0bcb2016f4a59186023906adb8359af6d44ab2
 ```
 
 When you're done auditing, switch back and run the verify script
