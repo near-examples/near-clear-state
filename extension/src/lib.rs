@@ -20,9 +20,10 @@ use color_eyre::eyre::{Result, eyre};
 use near_primitives::action::{Action, DeployContractAction, FunctionCallAction};
 use serde::Serialize;
 
-/// The state-cleanup wasm compiled from `contract/`. Built reproducibly
-/// via `cargo near build reproducible-wasm`; verifiable with
-/// `scripts/verify-wasm.sh`.
+/// NEAR's prebuilt `state-manipulation` cleanup wasm, vendored from
+/// core-contracts at the commit pinned in
+/// `wasm/state_cleanup.wasm.provenance`. Refresh with
+/// `scripts/update-wasm.sh`; verify with `scripts/verify-wasm.sh`.
 const BUNDLED_WASM: &[u8] = include_bytes!("../wasm/state_cleanup.wasm");
 
 #[derive(Debug, Clone, interactive_clap::InteractiveClap)]
