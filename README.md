@@ -46,7 +46,7 @@ One-shot wipe in a single transaction, so bounded by three ceilings:
 Directly from this GitHub repo:
 
 ```
-cargo install --git https://github.com/near-examples/near-clear-state near-clear-state
+cargo install --locked --git https://github.com/near-examples/near-clear-state near-clear-state
 ```
 
 Or from a local checkout:
