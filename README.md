@@ -53,7 +53,7 @@ Or from a local checkout:
 
 ```
 git clone https://github.com/near-examples/near-clear-state
-cargo install --path near-clear-state/extension
+cargo install --path near-clear-state/extension --locked
 ```
 
 Both put a `near-clear-state` binary in `~/.cargo/bin/`. As long as that
