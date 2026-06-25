@@ -1,0 +1,24 @@
+# Provenance for extension/wasm/state_cleanup.wasm
+#
+# The bundled wasm is the prebuilt `clean()` contract published by NEAR in
+# the core-contracts repo. We do NOT build it locally — we pin a specific
+# upstream commit and record the sha256 of the artifact at that commit.
+#
+# Trust anchor: COMMIT below. A reviewer audits that commit's
+# state-manipulation/src/lib.rs on github (a few-line clean() that
+# storage_remove()s each base64 key), then runs scripts/verify-wasm.sh to
+# confirm the committed wasm is byte-identical to what upstream published at
+# that commit. SHA256 is a convenience/cache value; trust rests on COMMIT.
+#
+# Both scripts/update-wasm.sh (writer) and scripts/verify-wasm.sh (reader)
+# treat this file as the single source of truth. Keep the KEY=VALUE format
+# (no spaces around '=') so the scripts can `source` it.
+
+REPO=https://github.com/near/core-contracts
+COMMIT=1b0436c96379c63aee7d2429c6d5d24019031ab8
+SOURCE_PATH=state-manipulation/res/state_cleanup.wasm
+SHA256=fd1dae684e7411b88a4804049d54115cf5d242b57dba19fccf442b94a9fb6fe3
+
+# Upstream license/attribution (NEAR core-contracts state-manipulation):
+#   Copyright (c) NEAR Inc <hello@near.org>
+#   Licensed under MIT OR Apache-2.0
