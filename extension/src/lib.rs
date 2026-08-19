@@ -2,7 +2,7 @@
 //! account's on-chain state without deleting the account.
 //!
 //! Flow per invocation:
-//!   1. Read state via ViewState RPC.
+//!   1. Read state via ViewState RPC, following the pagination cursor.
 //!   2. Fetch live `storage_remove_*` gas costs, `max_transaction_size`,
 //!      and `max_total_prepaid_gas` from protocol_config.
 //!   3. Estimate the gas needed to remove every key; error out if it
@@ -177,8 +177,8 @@ async fn build_transaction(
         return Err(eyre!(
             "Wipe transaction would exceed the protocol max transaction size \
              ({tx_size} B > {budget} B budget; protocol cap {cap} B with \
-             {buffer} B safety buffer). Retry with an RPC whose `view_state` \
-             returns fewer keys per call, or open an issue.",
+             {buffer} B safety buffer). Wiping in several transactions is not \
+             supported yet — open an issue.",
             budget = tx_size_budget,
             cap = protocol_constants.max_transaction_size,
             buffer = plan::TX_SIZE_BUFFER_BYTES,
