@@ -2,7 +2,7 @@
 name = "near-clear-state"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.93"
 description = "near-cli-rs extension that wipes a contract account's on-chain state without deleting the account."
 repository = "https://github.com/near-examples/near-clear-state"
 homepage = "https://github.com/near-examples/near-clear-state"
@@ -14,13 +14,13 @@ name = "near-clear-state"
 path = "src/main.rs"
 
 [dependencies]
-near-cli-rs = { version = "0.26", default-features = false }
+near-cli-rs = { version = "0.30", default-features = false }
 interactive-clap = "0.3"
 interactive-clap-derive = "0.3"
 color-eyre = "0.6"
-near-primitives = "0.35"
-near-jsonrpc-client = { version = "0.21", features = ["any"] }
-near-jsonrpc-primitives = "0.35"
+near-primitives = "0.37"
+near-jsonrpc-client = { version = "0.22", features = ["any"] }
+near-jsonrpc-primitives = "0.37"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread"] }

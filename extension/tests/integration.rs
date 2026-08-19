@@ -4,21 +4,20 @@
 //! - `wipe_clears_state` spawns the actual `near-clear-state` binary
 //!   against a fresh subaccount with ~25 KB of state. Covers the full
 //!   CLI surface end-to-end.
-//! - The four `wipe_*_on_*` size-matrix tests drive `cleanup::read_state`
-//!   and `plan::*` directly against named RPCs (FastNEAR vs Intear) to
-//!   exercise the preflight code paths at different state sizes.
+//! - The four `wipe_*` size-matrix tests drive `cleanup::read_state` and
+//!   `plan::*` directly against FastNEAR's public testnet RPC to exercise the
+//!   preflight code paths at different state sizes.
 //!
 //! Size matrix:
-//!   1. 40 KB on FastNEAR   → wipe succeeds (under view_state cap, under gas)
-//!   2. 100 KB on FastNEAR  → fails: read_state hits the ~50 KB view_state cap
-//!   3. ~500 KB on Intear   → wipe succeeds (well above FastNEAR's cap)
-//!   4. ~1.5 MB on Intear   → fails: gas estimate exceeds max_total_prepaid_gas
+//!   1. 40 KB    → wipe succeeds (single view_state page, under gas)
+//!   2. 100 KB   → wipe succeeds (over the ~50 KB one-shot view_state cap)
+//!   3. ~500 KB  → wipe succeeds (many view_state pages)
+//!   4. ~1.5 MB  → fails: gas estimate exceeds max_total_prepaid_gas
 //!
 //! Scenario 4 was originally specified as a 1.6 MB / tx-size failure, but
 //! the gas formula caps at ~14k entries before tx-size becomes the
-//! binding constraint, so this scenario verifies the gas-budget path on
-//! a permissive RPC. The tx-size preflight is covered by a unit test in
-//! `plan.rs`.
+//! binding constraint, so this scenario verifies the gas-budget path. The
+//! tx-size preflight is covered by a unit test in `plan.rs`.
 //!
 //! All tests skip cleanly if `TESTNET_ACCOUNT_ID` / `TESTNET_PRIVATE_KEY`
 //! are not set. Run with:
@@ -47,7 +46,6 @@ const STATE_FILLER_WASM: &[u8] = include_bytes!("fixtures/state_filler.wasm");
 const CLEAN_WASM: &[u8] = include_bytes!("../wasm/state_cleanup.wasm");
 
 const FASTNEAR_TESTNET: &str = "https://test.rpc.fastnear.com";
-const INTEAR_TESTNET: &str = "https://testnet-rpc.intea.rs";
 
 /// Entries inserted per fill() call. Each entry costs ~95 Ggas (storage_write
 /// base ~64 Ggas + per-byte costs + LookupMap wasm execution overhead). With
@@ -151,7 +149,7 @@ async fn run_cli_test_body(
     .map(|_| ())?;
 
     // Write ~25 KB of state (100 entries × 200-byte values, plus
-    // LookupMap overhead). Stays under the ~50 KB `view_state` RPC cap.
+    // LookupMap overhead). Fits in a single `view_state` page.
     println!("Filling state");
     unwrap_tx(
         Contract(sub_id.clone())
@@ -216,27 +214,26 @@ async fn wipe_40kb_on_fastnear_succeeds() -> Result<(), AnyError> {
 }
 
 #[tokio::test]
-async fn wipe_100kb_on_fastnear_fails_view_state_cap() -> Result<(), AnyError> {
+async fn wipe_100kb_on_fastnear_succeeds() -> Result<(), AnyError> {
+    // 250 × 200 B → ~100 KB, over the ~50 KB cap FastNEAR applies to
+    // one-shot view_state calls; read_state pages through it.
     run_scenario(Scenario {
         name: "100kb-fastnear",
         rpc_url: FASTNEAR_TESTNET,
         fill_count: 250,
         fill_value_size: 200,
         fund_near: 3,
-        expect: Expect::ReadStateError { substr: "too large" },
+        expect: Expect::Success,
     })
     .await
 }
 
 #[tokio::test]
-async fn wipe_500kb_on_intear_succeeds() -> Result<(), AnyError> {
-    // 2500 × 200 B → ~525 KB raw / ~775 KB view_state response. Below
-    // 4800×200 (~1.5 MB response) which flakes on Intear's unauthenticated
-    // response stream. Still 15× over FastNEAR's ~50 KB view_state cap, so
-    // the point (permissive RPC handles state FastNEAR can't) still stands.
+async fn wipe_500kb_on_fastnear_succeeds() -> Result<(), AnyError> {
+    // 2500 × 200 B → ~525 KB raw, spread over ~15 view_state pages.
     run_scenario(Scenario {
-        name: "500kb-intear",
-        rpc_url: INTEAR_TESTNET,
+        name: "500kb-fastnear",
+        rpc_url: FASTNEAR_TESTNET,
         fill_count: 2500,
         fill_value_size: 200,
         fund_near: 10,
@@ -246,14 +243,14 @@ async fn wipe_500kb_on_intear_succeeds() -> Result<(), AnyError> {
 }
 
 #[tokio::test]
-async fn wipe_1_5mb_on_intear_fails_gas_budget() -> Result<(), AnyError> {
+async fn wipe_1_5mb_on_fastnear_fails_gas_budget() -> Result<(), AnyError> {
     // ~1.3 mNEAR per entry storage stake (key + value bytes + LookupMap
     // overhead) → 14k entries = ~18 NEAR storage + gas. 25 NEAR leaves
     // a few NEAR slack for the deploy + first batches' gas before any
     // entries are written.
     run_scenario(Scenario {
-        name: "1_5mb-intear",
-        rpc_url: INTEAR_TESTNET,
+        name: "1_5mb-fastnear",
+        rpc_url: FASTNEAR_TESTNET,
         fill_count: 14000,
         fill_value_size: 100,
         fund_near: 25,
@@ -279,8 +276,6 @@ struct Scenario {
 enum Expect {
     /// Preflight succeeds and the wipe actually empties state on chain.
     Success,
-    /// `cleanup::read_state` returns Err whose message contains `substr`.
-    ReadStateError { substr: &'static str },
     /// `read_state` succeeds but `estimate_total_gas > max_total_prepaid_gas`.
     GasBudgetExceeded,
 }
@@ -387,31 +382,6 @@ async fn run_scenario_body(
     .await?;
 
     match scenario.expect {
-        Expect::ReadStateError { substr } => {
-            println!(
-                "[{name}] Calling read_state against {} — expecting error",
-                scenario.rpc_url,
-            );
-            let err = match cleanup::read_state(target_rpc, sub_id).await {
-                Err(e) => e,
-                Ok(entries) => {
-                    return Err(format!(
-                        "expected read_state to error with substring {substr:?}, \
-                         instead got {} entries",
-                        entries.len(),
-                    )
-                    .into());
-                }
-            };
-            let msg = format!("{err}");
-            println!("[{name}] read_state error: {msg}");
-            if !msg.to_lowercase().contains(&substr.to_lowercase()) {
-                return Err(format!(
-                    "expected read_state error to contain {substr:?}, got: {msg}",
-                )
-                .into());
-            }
-        }
         Expect::GasBudgetExceeded => {
             println!("[{name}] Calling read_state against {}", scenario.rpc_url);
             let entries = cleanup::read_state(target_rpc, sub_id).await?;
@@ -582,6 +552,8 @@ async fn read_state_count(
                 account_id: account_id.clone(),
                 prefix: StoreKey::from(Vec::new()),
                 include_proof: false,
+                after_key: None,
+                limit: None,
             },
         })
         .await?;
